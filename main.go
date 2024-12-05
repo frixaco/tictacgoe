@@ -186,10 +186,11 @@ func handleGame(room *Room, conn *websocket.Conn) {
 }
 
 type model struct {
-	width  int
-	height int
-	posX   int
-	posY   int
+	width   int
+	height  int
+	posX    int
+	posY    int
+	canMove bool
 }
 
 func initServer() {
@@ -223,21 +224,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if s := msg.String(); s == "ctrl+c" || s == "q" || s == "esc" {
 			return m, tea.Quit
 		}
-		if s := msg.String(); s == "h" {
-			if m.posY > 0 {
-				m.posY -= 1
+		if s := msg.String(); s == "h" || s == "left" {
+			if m.posX > 0 {
+				m.posX -= 1
 			}
-		} else if s == "j" {
-			if m.posX < 2 {
-				m.posX += 1
-			}
-		} else if s == "l" {
+		} else if s == "j" || s == "down" {
 			if m.posY < 2 {
 				m.posY += 1
 			}
-		} else if s == "k" {
-			if m.posX > 0 {
-				m.posX -= 1
+		} else if s == "l" || s == "right" {
+			if m.posX < 2 {
+				m.posX += 1
+			}
+		} else if s == "k" || s == "up" {
+			if m.posY > 0 {
+				m.posY -= 1
+			}
+		}
+
+		if s := msg.String(); s == "space" {
+			if m.canMove {
+				// TODO:
+				// games[]
 			}
 		}
 	case tea.WindowSizeMsg:
@@ -249,62 +257,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
-	cellWidth := m.width / 3
-	cellHeight := m.height/3 - 6
-	minSize := min(cellWidth, cellHeight)
+	s := ""
 
-	cell00BorderColor := lipgloss.Color("240")
-	if m.posX == 0 && m.posY == 0 {
-		cell00BorderColor = lipgloss.Color("212")
-	}
-	cell01BorderColor := lipgloss.Color("240")
-	if m.posX == 0 && m.posY == 1 {
-		cell01BorderColor = lipgloss.Color("212")
-	}
-	cell02BorderColor := lipgloss.Color("240")
-	if m.posX == 0 && m.posY == 2 {
-		cell02BorderColor = lipgloss.Color("212")
-	}
-	cell10BorderColor := lipgloss.Color("240")
-	if m.posX == 1 && m.posY == 0 {
-		cell10BorderColor = lipgloss.Color("212")
-	}
-	cell11BorderColor := lipgloss.Color("240")
-	if m.posX == 1 && m.posY == 1 {
-		cell11BorderColor = lipgloss.Color("212")
-	}
-	cell12BorderColor := lipgloss.Color("240")
-	if m.posX == 1 && m.posY == 2 {
-		cell12BorderColor = lipgloss.Color("212")
-	}
-	cell20BorderColor := lipgloss.Color("240")
-	if m.posX == 2 && m.posY == 0 {
-		cell20BorderColor = lipgloss.Color("212")
-	}
-	cell21BorderColor := lipgloss.Color("240")
-	if m.posX == 2 && m.posY == 1 {
-		cell21BorderColor = lipgloss.Color("212")
-	}
-	cell22BorderColor := lipgloss.Color("240")
-	if m.posX == 2 && m.posY == 2 {
-		cell22BorderColor = lipgloss.Color("212")
+	for i := 0; i < 3; i++ {
+		var rows [3]string
+		for j := 0; j < 3; j++ {
+			borderColor := lipgloss.Color("225")
+			if m.posX == j && m.posY == i {
+				borderColor = lipgloss.Color("212")
+			}
+			rows[j] = lipgloss.NewStyle().
+				Align(lipgloss.Center, lipgloss.Center).
+				Border(lipgloss.NormalBorder()).
+				BorderForeground(borderColor).
+				Width(m.width/3 - 28).
+				Height(m.height/3 - 3).
+				Render(fmt.Sprintf("%d%d", i, j))
+		}
+		s += lipgloss.JoinHorizontal(lipgloss.Center, rows[0], rows[1], rows[2]) + "\n"
 	}
 
-	cell00 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell00BorderColor).Height(minSize).Render("00")
-	cell01 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell01BorderColor).Height(minSize).Render("01")
-	cell02 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell02BorderColor).Height(minSize).Render("02")
-	cell10 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell10BorderColor).Height(minSize).Render("10")
-	cell11 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell11BorderColor).Height(minSize).Render("11")
-	cell12 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell12BorderColor).Height(minSize).Render("12")
-	cell20 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell20BorderColor).Height(minSize).Render("20")
-	cell21 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell21BorderColor).Height(minSize).Render("21")
-	cell22 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell22BorderColor).Height(minSize).Render("22")
+	s += "h,j,k,l or arrow keys to move around\n"
+	s += "Space to mark"
 
-	row1 := lipgloss.JoinHorizontal(lipgloss.Top, cell00, cell01, cell02)
-	row2 := lipgloss.JoinHorizontal(lipgloss.Top, cell10, cell11, cell12)
-	row3 := lipgloss.JoinHorizontal(lipgloss.Top, cell20, cell21, cell22)
-
-	return lipgloss.JoinVertical(lipgloss.Top, row1, row2, row3) + "\n"
+	return s
 }
 
 func main() {
