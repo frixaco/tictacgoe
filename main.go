@@ -1,36 +1,36 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
-
-	"time"
+	"strconv"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/gorilla/websocket"
 )
 
-const (
-	// Time allowed to write a message to the peer.
-	writeWait = 10 * time.Second
+// const (
+// 	// Time allowed to write a message to the peer.
+// 	writeWait = 10 * time.Second
 
-	// Time allowed to read the next pong message from the peer.
-	pongWait = 60 * time.Second
+// 	// Time allowed to read the next pong message from the peer.
+// 	pongWait = 60 * time.Second
 
-	// Send pings to peer with this period. Must be less than pongWait.
-	pingPeriod = (pongWait * 9) / 10
+// 	// Send pings to peer with this period. Must be less than pongWait.
+// 	pingPeriod = (pongWait * 9) / 10
 
-	// Maximum message size allowed from peer.
-	maxMessageSize = 512
-)
+// 	// Maximum message size allowed from peer.
+// 	maxMessageSize = 512
+// )
 
-var (
-	newline = []byte{'\n'}
-	space   = []byte{' '}
-)
+// var (
+// 	newline = []byte{'\n'}
+// 	space   = []byte{' '}
+// )
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -38,12 +38,20 @@ var upgrader = websocket.Upgrader{
 }
 
 type Room struct {
-	id    string
-	p1    *websocket.Conn
-	p2    *websocket.Conn
-	board [3][3]string
-	turn  string
-	state string
+	id      string
+	player1 *websocket.Conn
+	player2 *websocket.Conn
+	board   [3][3]string
+	turn    string // x or o
+	state   string // waiting, in-progress, finished
+}
+
+type Games struct {
+	rooms map[string]*Room
+}
+
+var games = Games{
+	rooms: make(map[string]*Room),
 }
 
 // // Client is a middleman between the websocket connection and the hub.
@@ -129,85 +137,59 @@ type Room struct {
 // 	}
 // }
 
-// // serveWs handles websocket requests from the peer.
-// func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
-// 	conn, err := upgrader.Upgrade(w, r, nil)
-// 	if err != nil {
-// 		log.Println(err)
-// 		return
-// 	}
-// 	client := &Client{hub: hub, conn: conn, send: make(chan []byte, 256)}
-// 	client.hub.register <- client
-
-// 	// Allow collection of memory referenced by the caller by doing all work in
-// 	// new goroutines.
-// 	go client.writePump()
-// 	go client.readPump()
-// }
-
-// // Hub maintains the set of active clients and broadcasts messages to the
-// // clients.
-// type Hub struct {
-// 	// Registered clients.
-// 	clients map[*Client]bool
-
-// 	// Inbound messages from the clients.
-// 	broadcast chan []byte
-
-// 	// Register requests from the clients.
-// 	register chan *Client
-
-// 	// Unregister requests from clients.
-// 	unregister chan *Client
-// }
-
-// func newHub() *Hub {
-// 	return &Hub{
-// 		broadcast:  make(chan []byte),
-// 		register:   make(chan *Client),
-// 		unregister: make(chan *Client),
-// 		clients:    make(map[*Client]bool),
-// 	}
-// }
-
-// func (h *Hub) run() {
-// 	for {
-// 		select {
-// 		case client := <-h.register:
-// 			h.clients[client] = true
-// 		case client := <-h.unregister:
-// 			if _, ok := h.clients[client]; ok {
-// 				delete(h.clients, client)
-// 				close(client.send)
-// 			}
-// 		case message := <-h.broadcast:
-// 			for client := range h.clients {
-// 				select {
-// 				case client.send <- message:
-// 				default:
-// 					close(client.send)
-// 					delete(h.clients, client)
-// 				}
-// 			}
-// 		}
-// 	}
-// }
-
-// var addr = flag.String("addr", ":8080", "http service address")
-
-func main() {
-
-	p := tea.NewProgram(model{}, tea.WithMouseAllMotion())
-	if _, err := p.Run(); err != nil {
-		log.Fatal(err)
+func serveWs(w http.ResponseWriter, r *http.Request, roomId string) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println(err)
+		return
 	}
 
+	if room, ok := games.rooms[roomId]; ok {
+		fmt.Println("room already exists:", roomId)
+
+		room.player2 = conn
+		room.state = "in-progress"
+
+		fmt.Println("starting game for room:", roomId)
+		go handleGame(room, conn)
+	} else {
+		fmt.Println("no room found, creating new one:", roomId)
+
+		room := Room{
+			id:      roomId,
+			player1: conn,
+			turn:    "x",
+			state:   "waiting",
+		}
+		games.rooms[roomId] = &room
+
+		fmt.Println("waiting for player 2 for room:", roomId)
+		go handleGame(&room, conn)
+	}
+}
+
+func handleGame(room *Room, conn *websocket.Conn) {
+	for {
+		var move string
+		if err := conn.ReadJSON(&move); err != nil {
+			break
+		}
+
+		fmt.Printf("move: %s\t for room: %s\n", move, room.id)
+		// a move is 3 character string: 11x, 01o
+		s := strings.Split(move, "")
+		x, _ := strconv.Atoi(s[0])
+		y, _ := strconv.Atoi(s[1])
+		turn := s[2]
+		room.board[x][y] = turn
+	}
 }
 
 type model struct {
-	board      [3][3]string
-	mouseEvent tea.MouseEvent
-	turn       int
+	width  int
+	height int
+	posX   int
+	posY   int
 }
 
 func initServer() {
@@ -220,15 +202,13 @@ func initServer() {
 
 	fmt.Println("roomId", roomId)
 
-	flag.Parse()
-	hub := newHub()
-	go hub.run()
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		serveWs(hub, w, r)
+		roomId := r.URL.Query().Get("room")
+		serveWs(w, r, roomId)
 	})
-	err := http.ListenAndServe(*addr, nil)
+	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
-		log.Fatal("ListenAndServe: ", err)
+		log.Fatal("websocket:", err)
 	}
 }
 
@@ -243,19 +223,93 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if s := msg.String(); s == "ctrl+c" || s == "q" || s == "esc" {
 			return m, tea.Quit
 		}
-
-	case tea.MouseMsg:
-		return m, tea.Printf("(X: %d, Y: %d) %s", msg.X, msg.Y, tea.MouseEvent(msg))
-
+		if s := msg.String(); s == "h" {
+			if m.posY > 0 {
+				m.posY -= 1
+			}
+		} else if s == "j" {
+			if m.posX < 2 {
+				m.posX += 1
+			}
+		} else if s == "l" {
+			if m.posY < 2 {
+				m.posY += 1
+			}
+		} else if s == "k" {
+			if m.posX > 0 {
+				m.posX -= 1
+			}
+		}
 	case tea.WindowSizeMsg:
-		fmt.Println("windowSize", msg.Width, msg.Height)
+		m.width = msg.Width
+		m.height = msg.Height
 	}
 
 	return m, nil
 }
 
 func (m model) View() string {
-	s := "Do mouse stuff. When you're done press q to quit.\n"
+	cellWidth := m.width / 3
+	cellHeight := m.height/3 - 6
+	minSize := min(cellWidth, cellHeight)
 
-	return s
+	cell00BorderColor := lipgloss.Color("240")
+	if m.posX == 0 && m.posY == 0 {
+		cell00BorderColor = lipgloss.Color("212")
+	}
+	cell01BorderColor := lipgloss.Color("240")
+	if m.posX == 0 && m.posY == 1 {
+		cell01BorderColor = lipgloss.Color("212")
+	}
+	cell02BorderColor := lipgloss.Color("240")
+	if m.posX == 0 && m.posY == 2 {
+		cell02BorderColor = lipgloss.Color("212")
+	}
+	cell10BorderColor := lipgloss.Color("240")
+	if m.posX == 1 && m.posY == 0 {
+		cell10BorderColor = lipgloss.Color("212")
+	}
+	cell11BorderColor := lipgloss.Color("240")
+	if m.posX == 1 && m.posY == 1 {
+		cell11BorderColor = lipgloss.Color("212")
+	}
+	cell12BorderColor := lipgloss.Color("240")
+	if m.posX == 1 && m.posY == 2 {
+		cell12BorderColor = lipgloss.Color("212")
+	}
+	cell20BorderColor := lipgloss.Color("240")
+	if m.posX == 2 && m.posY == 0 {
+		cell20BorderColor = lipgloss.Color("212")
+	}
+	cell21BorderColor := lipgloss.Color("240")
+	if m.posX == 2 && m.posY == 1 {
+		cell21BorderColor = lipgloss.Color("212")
+	}
+	cell22BorderColor := lipgloss.Color("240")
+	if m.posX == 2 && m.posY == 2 {
+		cell22BorderColor = lipgloss.Color("212")
+	}
+
+	cell00 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell00BorderColor).Height(minSize).Render("00")
+	cell01 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell01BorderColor).Height(minSize).Render("01")
+	cell02 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell02BorderColor).Height(minSize).Render("02")
+	cell10 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell10BorderColor).Height(minSize).Render("10")
+	cell11 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell11BorderColor).Height(minSize).Render("11")
+	cell12 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell12BorderColor).Height(minSize).Render("12")
+	cell20 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell20BorderColor).Height(minSize).Render("20")
+	cell21 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell21BorderColor).Height(minSize).Render("21")
+	cell22 := lipgloss.NewStyle().Align(lipgloss.Center).Width(minSize + 5).Border(lipgloss.NormalBorder()).BorderForeground(cell22BorderColor).Height(minSize).Render("22")
+
+	row1 := lipgloss.JoinHorizontal(lipgloss.Top, cell00, cell01, cell02)
+	row2 := lipgloss.JoinHorizontal(lipgloss.Top, cell10, cell11, cell12)
+	row3 := lipgloss.JoinHorizontal(lipgloss.Top, cell20, cell21, cell22)
+
+	return lipgloss.JoinVertical(lipgloss.Top, row1, row2, row3) + "\n"
+}
+
+func main() {
+	p := tea.NewProgram(model{}, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		log.Fatal(err)
+	}
 }

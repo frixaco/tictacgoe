@@ -14,3 +14,5 @@ TODO:
   - Send a message to all clients
 - Detect a draw
   - Send a message to all clients
+- Global room list so people can join games
+  - Simple website with shareable link or smth?
